@@ -1,10 +1,6 @@
 name: Unit Tests
 on:
-  push:
-    branches:
-      - main
-  pull_request:
-  merge_group:
+  workflow_dispatch:
 
 jobs:
   node-tests:
@@ -14,23 +10,35 @@ jobs:
         node_version:
           - "14"
           - "16"
-          - "18"
+          # Pinned to the last 18.x before 18.19.0. Node >=18.19 moved ESM module
+          # customization hooks off-thread, which makes @opentelemetry/instrumentation's
+          # `test:esm` harness (node --experimental-loader=./hook.mjs + import-in-the-middle)
+          # re-run the mocha entry in the loader thread without its file arguments, so mocha
+          # dies with "No test files found". Upstream's CI at this release ran Node 18.17.
+          - "18.18.2"
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     env:
       NPM_CONFIG_UNSAFE_PERM: true
     steps:
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v3
+      - uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node_version }}
 
-      - run: npm install -g npm@latest
+      - name: Pin npm registry to release date
+        run: npm config set registry 'https://:2023-08-08T13%3A21%3A04.540Z@time-machines-npm.sealsecurity.io/'
+
+      # npm@latest resolves to the prerelease npm@10.0.0-pre.0 at this release date,
+      # which requires node ^18.17.0 || >=20.5.0 and hard-fails EBADENGINE on node 16.
+      # npm@9 supports ^14.17.0 || ^16.13.0 || >=18.0.0 — the whole matrix.
+      - run: npm install -g npm@9
 
       - name: restore lerna
         id: cache
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: |
             node_modules
@@ -53,30 +61,49 @@ jobs:
       - name: Unit tests
         run: |
           # TODO(legendecas): webpack https://stackoverflow.com/questions/69692842/error-message-error0308010cdigital-envelope-routinesunsupported
-          if [ "${{ matrix.node_version }}" = "18" ]; then
+          if [ "${{ matrix.node_version }}" = "18.18.2" ]; then
             export NODE_OPTIONS=--openssl-legacy-provider
           fi
           npm run test
-      - name: Report Coverage
-        run: npm run codecov
-        if: ${{ matrix.node_version == '14' }}
+
+      - name: Pack @opentelemetry/core
+        if: matrix.node_version == '18.18.2'
+        working-directory: ./packages/opentelemetry-core
+        run: |
+          npm pack
+          mv opentelemetry-core-1.15.2.tgz core-1.15.2.tgz
+
+      - name: Upload @opentelemetry/core tarball
+        if: matrix.node_version == '18.18.2'
+        uses: actions/upload-artifact@v4
+        with:
+          name: core-1.15.2-tgz
+          path: packages/opentelemetry-core/core-1.15.2.tgz
+          if-no-files-found: error
   node-windows-tests:
     runs-on: windows-latest
+    timeout-minutes: 45
     env:
       NPM_CONFIG_UNSAFE_PERM: true
     steps:
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v3
+      - uses: actions/setup-node@v4
         with:
           node-version: '16'
 
-      - run: npm install -g npm@latest
+      - name: Pin npm registry to release date
+        run: npm config set registry 'https://:2023-08-08T13%3A21%3A04.540Z@time-machines-npm.sealsecurity.io/'
+
+      # npm@latest resolves to the prerelease npm@10.0.0-pre.0 at this release date,
+      # which requires node ^18.17.0 || >=20.5.0 and hard-fails EBADENGINE on node 16.
+      # npm@9 supports ^14.17.0 || ^16.13.0 || >=18.0.0 — the whole matrix.
+      - run: npm install -g npm@9
 
       - name: restore lerna
         id: cache
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: |
             node_modules
@@ -101,19 +128,23 @@ jobs:
         run: npm run test
   browser-tests:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     env:
       NPM_CONFIG_UNSAFE_PERM: true
     steps:
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v3
+      - uses: actions/setup-node@v4
         with:
           node-version: 16
 
+      - name: Pin npm registry to release date
+        run: npm config set registry 'https://:2023-08-08T13%3A21%3A04.540Z@time-machines-npm.sealsecurity.io/'
+
       - name: restore lerna
         id: cache
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: |
             node_modules
@@ -135,22 +166,24 @@ jobs:
 
       - name: Unit tests
         run: npm run test:browser
-      - name: Report Coverage
-        run: npm run codecov:browser
   webworker-tests:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     env:
       NPM_CONFIG_UNSAFE_PERM: true
     steps:
       - name: Checkout
-        uses: actions/checkout@v3.5.3
-      - uses: actions/setup-node@v3
+        uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: 16
 
+      - name: Pin npm registry to release date
+        run: npm config set registry 'https://:2023-08-08T13%3A21%3A04.540Z@time-machines-npm.sealsecurity.io/'
+
       - name: restore lerna
         id: cache
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: |
             node_modules
@@ -172,8 +205,6 @@ jobs:
 
       - name: Unit tests
         run: npm run test:webworker
-      - name: Report Coverage
-        run: npm run codecov:webworker
   api-eol-node-test:
     strategy:
       fail-fast: false
@@ -183,13 +214,17 @@ jobs:
           - "10"
           - "12"
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v3
+      - uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node_version }}
+
+      - name: Pin npm registry to release date
+        run: npm config set registry 'https://:2023-08-08T13%3A21%3A04.540Z@time-machines-npm.sealsecurity.io/'
 
       - name: Build
         working-directory: ./api
